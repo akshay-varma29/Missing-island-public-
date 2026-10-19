@@ -1560,6 +1560,11 @@ export function buildFreshwaterStreamWaterMesh(): THREE.Group {
     }
   }
 
+  const baseYs = new Float32Array(vertices.length / 3);
+  for (let i = 0; i < baseYs.length; i++) {
+    baseYs[i] = vertices[i * 3 + 1];
+  }
+
   ribbonGeom.setIndex(indices);
   ribbonGeom.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
   ribbonGeom.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
@@ -1578,6 +1583,7 @@ export function buildFreshwaterStreamWaterMesh(): THREE.Group {
 
   const ribbonMesh = new THREE.Mesh(ribbonGeom, streamMat);
   ribbonMesh.name = 'freshwater_stream_ribbon';
+  ribbonMesh.userData.baseY = baseYs;
   group.add(ribbonMesh);
 
   // 2. Cascading stepped waterfall curtain at z: 33..37.2, x: -12.5
@@ -2887,7 +2893,9 @@ export function buildVolumetricGodRays(): THREE.Group {
     group.add(rayMesh);
   });
 
-  return group;
+  const bakedRays = bakeGroupByMaterial(group, false, false);
+  bakedRays.name = 'volumetric_god_rays';
+  return bakedRays;
 }
 
 /**
@@ -2982,31 +2990,37 @@ export function buildWaterfallSplashRings(): THREE.Group {
  */
 export function buildBioluminescentMushroomCluster(scale = 1.0): THREE.Group {
   const group = new THREE.Group();
-  const stalkMat = getCachedMaterial('shroom_stalk_mat', () =>
-    new THREE.MeshStandardMaterial({
+  const stalkMat = getCachedMaterial('shroom_stalk_mat', () => {
+    const m = new THREE.MeshStandardMaterial({
       color: 0xdfede2,
       roughness: 0.7,
       metalness: 0.05,
-    })
-  );
-  const cyanCapMat = getCachedMaterial('shroom_cap_cyan', () =>
-    new THREE.MeshStandardMaterial({
+    });
+    m.userData.noShadow = true;
+    return m;
+  });
+  const cyanCapMat = getCachedMaterial('shroom_cap_cyan', () => {
+    const m = new THREE.MeshStandardMaterial({
       color: 0x06b6d4,
       emissive: 0x0891b2,
       emissiveIntensity: 0.85,
       roughness: 0.25,
       metalness: 0.1,
-    })
-  );
-  const amberCapMat = getCachedMaterial('shroom_cap_amber', () =>
-    new THREE.MeshStandardMaterial({
+    });
+    m.userData.noShadow = true;
+    return m;
+  });
+  const amberCapMat = getCachedMaterial('shroom_cap_amber', () => {
+    const m = new THREE.MeshStandardMaterial({
       color: 0xf59e0b,
       emissive: 0xd97706,
       emissiveIntensity: 0.85,
       roughness: 0.25,
       metalness: 0.1,
-    })
-  );
+    });
+    m.userData.noShadow = true;
+    return m;
+  });
 
   const shroomData = [
     { x: 0, z: 0, h: 0.32, r: 0.14, isAmber: false },
@@ -3031,7 +3045,99 @@ export function buildBioluminescentMushroomCluster(scale = 1.0): THREE.Group {
     group.add(cap);
   }
 
-  return group;
+  return bakeGroupByMaterial(group, false, true);
+}
+
+/**
+ * Updates bioluminescent mushroom cap emissive intensity in O(1) time via shared material cache.
+ */
+export function updateBioluminescentMushroomEmissive(intensity: number): void {
+  const cyanCap = _materialCache.get('shroom_cap_cyan') as THREE.MeshStandardMaterial | undefined;
+  const amberCap = _materialCache.get('shroom_cap_amber') as THREE.MeshStandardMaterial | undefined;
+  if (cyanCap) cyanCap.emissiveIntensity = intensity;
+  if (amberCap) amberCap.emissiveIntensity = intensity;
+}
+
+/**
+ * Returns shared cached PBR materials for rocks, boulders, shells, and shipwreck props
+ * so bakeGroupByMaterial merges them into minimal GPU draw calls.
+ */
+export function getSharedEnvironmentMaterials() {
+  const bumpTex = createOrganicBumpTexture(256);
+  const barkTex = getJungleBarkTexture();
+  const fabricTex = getWeatheredFabricTexture();
+
+  const wetBasaltMat = getCachedMaterial('env_wet_basalt', () =>
+    new THREE.MeshStandardMaterial({
+      color: 0x242322,
+      bumpMap: bumpTex,
+      bumpScale: 0.12,
+      roughness: 0.65,
+      metalness: 0.15,
+    })
+  );
+
+  const mossyRockMat = getCachedMaterial('env_mossy_rock', () =>
+    new THREE.MeshStandardMaterial({
+      color: 0x384534,
+      bumpMap: bumpTex,
+      bumpScale: 0.1,
+      roughness: 0.85,
+      metalness: 0.04,
+    })
+  );
+
+  const rockMat = getCachedMaterial('env_coastal_rock', () =>
+    new THREE.MeshStandardMaterial({
+      color: 0x56524e,
+      bumpMap: bumpTex,
+      bumpScale: 0.08,
+      roughness: 0.86,
+      metalness: 0.05,
+    })
+  );
+
+  const shellMat = getCachedMaterial('env_conch_shell', () => {
+    const m = new THREE.MeshStandardMaterial({
+      color: 0xfff0db,
+      roughness: 0.28,
+      metalness: 0.08,
+    });
+    m.userData.noShadow = true;
+    return m;
+  });
+
+  const timberMat = getCachedMaterial('env_shipwreck_timber', () =>
+    new THREE.MeshStandardMaterial({
+      color: 0x4e342e,
+      map: barkTex,
+      bumpMap: bumpTex,
+      bumpScale: 0.05,
+      roughness: 0.9,
+    })
+  );
+
+  const sailMat = getCachedMaterial('env_shipwreck_sail', () =>
+    new THREE.MeshStandardMaterial({
+      color: 0xd7ccc8,
+      map: fabricTex,
+      bumpMap: bumpTex,
+      bumpScale: 0.02,
+      roughness: 0.85,
+      side: THREE.DoubleSide,
+    })
+  );
+
+  return {
+    bumpTex,
+    wetBasaltMat,
+    mossyRockMat,
+    riverRockMat: rockMat,
+    rockMat,
+    shellMat,
+    timberMat,
+    sailMat,
+  };
 }
 
 

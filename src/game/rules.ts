@@ -611,25 +611,46 @@ export const STAGE2_RIVERS: readonly Stage2River[] = [
   },
 ];
 
+const _HILL_MTN_TRIG = STAGE2_HILLS_AND_MOUNTAINS.map((p) => ({
+  cosA: Math.cos(p.ridgeAngle),
+  sinA: Math.sin(p.ridgeAngle),
+  maxR: Math.max(p.radiusX, p.radiusZ),
+  invRx2: 1 / (p.radiusX * p.radiusX),
+  invRz2: 1 / (p.radiusZ * p.radiusZ),
+}));
+
+const EMPTY_STAGE2_HYDROLOGY: Stage2HydrologyInfo = Object.freeze({
+  inLake: false,
+  inRiver: false,
+  inWater: false,
+  nearShore: false,
+  waterSurfaceY: 0,
+  waterDepth: 0,
+  bedBlend: 0,
+  featureId: null,
+  featureName: null,
+});
+
 /**
  * Computes the elevation gain contributed by Stage 2 Hills & Mountains at world coordinates (x, z).
  */
 export function getStage2HillMountainElevationAt(x: number, z: number): number {
+  if (z > 68 || (Math.abs(x) < 68 && z > -48)) {
+    return 0;
+  }
   let maxGain = 0;
 
   for (let i = 0; i < STAGE2_HILLS_AND_MOUNTAINS.length; i++) {
     const p = STAGE2_HILLS_AND_MOUNTAINS[i];
+    const trig = _HILL_MTN_TRIG[i];
     const dx = x - p.x;
     const dz = z - p.z;
     // Quick bounding-box reject before trig
-    const maxR = Math.max(p.radiusX, p.radiusZ);
-    if (Math.abs(dx) > maxR || Math.abs(dz) > maxR) continue;
+    if (Math.abs(dx) > trig.maxR || Math.abs(dz) > trig.maxR) continue;
 
-    const cosA = Math.cos(p.ridgeAngle);
-    const sinA = Math.sin(p.ridgeAngle);
-    const lx = dx * cosA - dz * sinA;
-    const lz = dx * sinA + dz * cosA;
-    const normD2 = (lx * lx) / (p.radiusX * p.radiusX) + (lz * lz) / (p.radiusZ * p.radiusZ);
+    const lx = dx * trig.cosA - dz * trig.sinA;
+    const lz = dx * trig.sinA + dz * trig.cosA;
+    const normD2 = lx * lx * trig.invRx2 + lz * lz * trig.invRz2;
     if (normD2 >= 1.0) continue;
 
     const d = Math.sqrt(normD2);
@@ -659,6 +680,11 @@ export function getStage2HillMountainElevationAt(x: number, z: number): number {
  * Evaluates Stage 2 Freshwater Lakes and Rivers at world coordinates (x, z).
  */
 export function getStage2HydrologyAt(x: number, z: number): Stage2HydrologyInfo {
+  // Fast spatial reject outside all Stage 2 lakes/rivers or inside central volcano/beach core
+  if (z > 86 || z < -9400 || x < -2750 || x > 2350 || (Math.abs(x) < 35 && z > -42)) {
+    return EMPTY_STAGE2_HYDROLOGY;
+  }
+
   let lakeMatch: Stage2HydrologyInfo | null = null;
 
   // 1. Check Stage 2 Lakes
@@ -773,17 +799,7 @@ export function getStage2HydrologyAt(x: number, z: number): Stage2HydrologyInfo 
     return lakeMatch;
   }
 
-  return {
-    inLake: false,
-    inRiver: false,
-    inWater: false,
-    nearShore: false,
-    waterSurfaceY: 0,
-    waterDepth: 0,
-    bedBlend: 0,
-    featureId: null,
-    featureName: null,
-  };
+  return EMPTY_STAGE2_HYDROLOGY;
 }
 
 /**

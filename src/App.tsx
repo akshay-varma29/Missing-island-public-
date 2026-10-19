@@ -16,6 +16,7 @@ import {
   MACRO_ISLAND_CENTER_X,
   MACRO_ISLAND_CENTER_Z,
 } from './game/rules';
+import { AERIAL_PRESETS, AerialPresetId } from './game/developerMode';
 
 const INITIAL_IST = getISTTimeState();
 
@@ -80,6 +81,16 @@ const INITIAL_HUD: HudSnapshot = {
   nearbyCreature: null,
   questObjective:
     '1. Watch the Sea Supply Box drifting in from the ocean waves & open it on the SW Shore',
+  devMode: {
+    enabled: false,
+    viewMode: 'third_person',
+    activePresetId: null,
+    altitude: 155,
+    altitudeLabel: '155 m',
+    targetCoords: '(0m, +38m)',
+    compassHeading: 0,
+    clearSkies: true,
+  },
 };
 
 const MACRO_COASTLINE_SVG_PATH = generateIslandCoastlineSvgPath(72, 100, 11500);
@@ -758,6 +769,50 @@ export default function App() {
     engineRef.current?.flipCamera180();
   };
 
+  const handleToggleAerialView = (e?: React.MouseEvent<HTMLButtonElement>) => {
+    e?.currentTarget.blur();
+    if (hud.devMode?.viewMode !== 'third_person') {
+      engineRef.current?.setCameraViewMode('third_person');
+    } else {
+      engineRef.current?.setCameraViewMode('aerial_sanctuary');
+    }
+  };
+
+  const handleReturnToThirdPerson = (e?: React.MouseEvent<HTMLButtonElement>) => {
+    e?.currentTarget.blur();
+    engineRef.current?.setCameraViewMode('third_person');
+  };
+
+  const handleSelectAerialPreset = (presetId: AerialPresetId, e?: React.MouseEvent<HTMLButtonElement>) => {
+    e?.currentTarget.blur();
+    engineRef.current?.selectAerialPreset(presetId);
+  };
+
+  const handleAdjustAerialAltitude = (deltaMeters: number, e?: React.MouseEvent<HTMLButtonElement>) => {
+    e?.currentTarget.blur();
+    if (!hud.devMode) return;
+    engineRef.current?.setAerialAltitude(hud.devMode.altitude + deltaMeters);
+  };
+
+  const handleSetAerialAltitudeExact = (alt: number) => {
+    engineRef.current?.setAerialAltitude(alt);
+  };
+
+  const handleRotateAerialHeading = (deg: number, e?: React.MouseEvent<HTMLButtonElement>) => {
+    e?.currentTarget.blur();
+    engineRef.current?.rotateAerialCamera((deg * Math.PI) / 180);
+  };
+
+  const handleTeleportToAerialFocus = (e?: React.MouseEvent<HTMLButtonElement>) => {
+    e?.currentTarget.blur();
+    engineRef.current?.teleportPlayerToAerialTarget();
+  };
+
+  const handleToggleClearSkies = (e?: React.MouseEvent<HTMLButtonElement>) => {
+    e?.currentTarget.blur();
+    engineRef.current?.toggleDevClearSkies();
+  };
+
   const handleTriggerJump = (e: React.MouseEvent<HTMLButtonElement>) => {
     e.currentTarget.blur();
     engineRef.current?.triggerJump();
@@ -994,6 +1049,171 @@ export default function App() {
          ===================================================================== */}
       {hud.state === 'playing' && (
         <div className="fixed inset-0 z-10 pointer-events-none flex flex-col justify-between p-2.5 sm:p-4 md:p-6">
+          {/* =================================================================
+              AERIAL BIRD'S-EYE VANTAGE DECK & DEVELOPER CONTROLLER
+              - Floating Top-Center Bar
+              - Prominent "Return to 3rd Person View [V]" Button
+              - Quick Vantage Presets across Sanctuary, 20km Island, Lakes, Hills, Beach, Volcano
+              - Real-time Altitude Slider & Zoom Controls
+              - Pan, Orbit, Clear Skies & Drop Castaway Here
+             ================================================================= */}
+          {hud.devMode?.viewMode !== 'third_person' && (
+            <div
+              data-testid="aerial-vantage-deck"
+              role="region"
+              aria-label="Aerial Bird's-Eye Camera Controls"
+              className="fixed top-2 sm:top-4 left-1/2 -translate-x-1/2 z-30 pointer-events-auto max-w-[96vw] sm:max-w-2xl md:max-w-3xl w-full rounded-2xl p-2.5 sm:p-3 border-2 border-sky-400/80 shadow-2xl backdrop-blur-md text-stone-100 flex flex-col gap-2"
+              style={{ backgroundColor: 'rgba(8, 22, 32, 0.95)' }}
+            >
+              {/* Row 1: Header with Live Mode, Altitude Readout, and Return to 3rd-Person Button */}
+              <div className="flex flex-wrap items-center justify-between gap-2 border-b border-sky-800/60 pb-1.5">
+                <div className="flex items-center gap-2">
+                  <span className="w-2.5 h-2.5 rounded-full bg-sky-400 animate-pulse" />
+                  <span className="text-xs sm:text-sm font-extrabold uppercase tracking-wider text-sky-200">
+                    Aerial View (Bird's-Eye)
+                  </span>
+                  <span
+                    data-testid="aerial-altitude-badge"
+                    className="px-2 py-0.5 rounded bg-sky-950/90 border border-sky-400/60 font-mono-num text-[11px] font-bold text-sky-300"
+                  >
+                    Alt: {hud.devMode?.altitudeLabel}
+                  </span>
+                  <span className="hidden sm:inline font-mono-num text-[11px] text-stone-300">
+                    Pos: {hud.devMode?.targetCoords}
+                  </span>
+                </div>
+
+                {/* Return to 3rd-Person View Button */}
+                <button
+                  type="button"
+                  data-testid="return-to-third-person-button"
+                  onClick={handleReturnToThirdPerson}
+                  className="px-3.5 py-1.5 rounded-lg bg-amber-400 hover:bg-amber-300 text-stone-950 font-display font-extrabold text-xs sm:text-sm shadow-md transition-all active:scale-95 cursor-pointer flex items-center gap-1.5"
+                >
+                  <span>↩ Return to 3rd Person [V]</span>
+                </button>
+              </div>
+
+              {/* Row 2: Aerial Presets Across Sanctuary and Macro 20km Island */}
+              <div className="flex items-center gap-1.5 overflow-x-auto py-0.5 no-scrollbar text-xs">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-amber-300 shrink-0 mr-1">
+                  Presets:
+                </span>
+                {AERIAL_PRESETS.map((preset) => {
+                  const active = hud.devMode?.activePresetId === preset.id;
+                  return (
+                    <button
+                      key={preset.id}
+                      type="button"
+                      data-testid={`aerial-preset-${preset.id}`}
+                      onClick={(e) => handleSelectAerialPreset(preset.id, e)}
+                      className={`px-2.5 py-1 rounded-md text-[11px] font-semibold transition-all whitespace-nowrap cursor-pointer shrink-0 border ${
+                        active
+                          ? 'bg-sky-400 text-stone-950 border-sky-200 shadow font-bold'
+                          : 'bg-stone-900/80 text-stone-200 border-stone-700/80 hover:bg-sky-950 hover:border-sky-400/60'
+                      }`}
+                      title={preset.description}
+                    >
+                      {preset.shortLabel}
+                    </button>
+                  );
+                })}
+              </div>
+
+              {/* Row 3: Altitude Slider, Zoom Buttons & Developer Actions */}
+              <div className="flex flex-wrap items-center justify-between gap-2 pt-0.5 text-xs">
+                {/* Altitude Slider & Zoom Buttons */}
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] uppercase font-bold text-stone-300 shrink-0">
+                    Altitude:
+                  </span>
+                  <button
+                    type="button"
+                    onClick={(e) => handleAdjustAerialAltitude(-50, e)}
+                    className="w-6 h-6 rounded bg-stone-800 hover:bg-stone-700 border border-stone-600 flex items-center justify-center font-bold text-stone-200 cursor-pointer"
+                    title="Zoom In (Decrease Altitude)"
+                  >
+                    -
+                  </button>
+                  <input
+                    type="range"
+                    min={30}
+                    max={2200}
+                    step={10}
+                    value={hud.devMode?.altitude ?? 150}
+                    onChange={(e) => handleSetAerialAltitudeExact(Number(e.target.value))}
+                    className="w-24 sm:w-36 accent-sky-400 cursor-pointer"
+                    aria-label="Aerial Camera Altitude"
+                  />
+                  <button
+                    type="button"
+                    onClick={(e) => handleAdjustAerialAltitude(50, e)}
+                    className="w-6 h-6 rounded bg-stone-800 hover:bg-stone-700 border border-stone-600 flex items-center justify-center font-bold text-stone-200 cursor-pointer"
+                    title="Zoom Out (Increase Altitude)"
+                  >
+                    +
+                  </button>
+                </div>
+
+                {/* Orbit Buttons & Actions */}
+                <div className="flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={(e) => handleRotateAerialHeading(45, e)}
+                    className="px-2 py-1 rounded bg-stone-800 hover:bg-stone-700 border border-stone-600 text-[11px] text-stone-200 cursor-pointer"
+                    title="Orbit 45° Left [Q]"
+                  >
+                    ↺ 45°
+                  </button>
+                  <button
+                    type="button"
+                    onClick={(e) => handleRotateAerialHeading(-45, e)}
+                    className="px-2 py-1 rounded bg-stone-800 hover:bg-stone-700 border border-stone-600 text-[11px] text-stone-200 cursor-pointer"
+                    title="Orbit 45° Right [E]"
+                  >
+                    ↻ 45°
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={handleToggleClearSkies}
+                    className={`px-2 py-1 rounded border text-[11px] font-semibold cursor-pointer ${
+                      hud.devMode?.clearSkies
+                        ? 'bg-emerald-950/80 border-emerald-500 text-emerald-200'
+                        : 'bg-stone-800 border-stone-600 text-stone-300'
+                    }`}
+                    title="Toggle clear skies fog reduction"
+                  >
+                    {hud.devMode?.clearSkies ? 'Clear Skies' : 'Natural Fog'}
+                  </button>
+
+                  <button
+                    type="button"
+                    data-testid="teleport-to-aerial-target-button"
+                    onClick={handleTeleportToAerialFocus}
+                    className="px-2.5 py-1 rounded bg-amber-500/20 hover:bg-amber-500/30 border border-amber-400/60 text-amber-200 text-[11px] font-semibold cursor-pointer whitespace-nowrap"
+                    title="Drop player at current aerial target and return to 3rd person"
+                  >
+                    📍 Drop Player Here
+                  </button>
+                </div>
+              </div>
+
+              {/* Flight Keyboard Navigation Hints */}
+              <div className="hidden sm:flex items-center justify-between text-[10px] text-stone-400 border-t border-sky-900/60 pt-1">
+                <span>
+                  Controls: <strong className="text-stone-200">WASD / Drag</strong> Pan camera ·{' '}
+                  <strong className="text-stone-200">Mousewheel / R / F</strong> Altitude ·{' '}
+                  <strong className="text-stone-200">Q / E</strong> Rotate ·{' '}
+                  <strong className="text-stone-200">Shift</strong> Fast flight
+                </span>
+                <span className="text-amber-300 font-semibold">
+                  Press [V] anytime to return to 3rd-Person
+                </span>
+              </div>
+            </div>
+          )}
+
           {/* TOP ROW: Top-Left Castaway Vitals & Top-Right Island Clock + Circular Minimap */}
           <div className="flex flex-nowrap items-start justify-between gap-1.5 sm:gap-4 w-full">
             {/* Top-Left Cluster: World-Matched Castaway Vitality, Stamina & Nourishment */}
@@ -1238,6 +1458,59 @@ export default function App() {
                       className="font-mono-num text-[9px] sm:text-[11px] font-bold"
                     >
                       360° · {hud.camCompassDeg ?? 0}°
+                    </span>
+                  </button>
+
+                  {/* Aerial View / Developer Mode Toggle Button */}
+                  <button
+                    type="button"
+                    tabIndex={-1}
+                    aria-label={
+                      hud.devMode?.viewMode !== 'third_person'
+                        ? 'Return to 3rd-Person Camera [V]'
+                        : 'Switch to Aerial View [V]'
+                    }
+                    data-testid="toggle-aerial-view-button"
+                    onClick={handleToggleAerialView}
+                    className={`h-7 sm:h-10 px-2 sm:px-2.5 rounded-lg border flex items-center gap-1.5 transition-colors cursor-pointer shrink-0 ${
+                      hud.devMode?.viewMode !== 'third_person'
+                        ? 'bg-sky-500 text-stone-950 border-sky-300 font-bold shadow-lg'
+                        : hud.devMode?.enabled
+                        ? 'bg-amber-400 text-stone-950 border-amber-300 font-bold'
+                        : 'border-amber-900/50 text-stone-200 hover:text-amber-300 hover:border-amber-400/60'
+                    }`}
+                    style={
+                      hud.devMode?.viewMode !== 'third_person' || hud.devMode?.enabled
+                        ? undefined
+                        : { backgroundColor: 'rgba(18, 25, 23, 0.88)' }
+                    }
+                    title="Toggle Aerial Overview [V]"
+                  >
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                      <path
+                        d="M12 2L2 7L12 12L22 7L12 2Z"
+                        stroke="currentColor"
+                        strokeWidth="2"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      />
+                      <path
+                        d="M2 17L12 22L22 17"
+                        stroke="currentColor"
+                        strokeWidth="2"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      />
+                      <path
+                        d="M2 12L12 17L22 12"
+                        stroke="currentColor"
+                        strokeWidth="2"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      />
+                    </svg>
+                    <span className="text-[9px] sm:text-[11px] font-bold uppercase tracking-tight">
+                      {hud.devMode?.viewMode !== 'third_person' ? 'Aerial' : 'Aerial [V]'}
                     </span>
                   </button>
 
