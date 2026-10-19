@@ -10,6 +10,8 @@ let _barkTex: THREE.CanvasTexture | null = null;
 let _palmBarkTex: THREE.CanvasTexture | null = null;
 let _fabricTex: THREE.CanvasTexture | null = null;
 let _foliageTex: THREE.CanvasTexture | null = null;
+let _waterRippleTex: THREE.CanvasTexture | null = null;
+let _rockSurfaceTex: THREE.CanvasTexture | null = null;
 
 const _materialCache = new Map<string, THREE.Material>();
 
@@ -289,6 +291,83 @@ function getFoliageBumpTexture(): THREE.CanvasTexture {
   return tex;
 }
 
+export function getWaterRippleBumpTexture(): THREE.CanvasTexture {
+  if (_waterRippleTex) return _waterRippleTex;
+  const size = 128;
+  const canvas = document.createElement('canvas');
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext('2d');
+  if (ctx) {
+    const imgData = ctx.createImageData(size, size);
+    const data = imgData.data;
+    const twoPi = Math.PI * 2;
+    for (let y = 0; y < size; y++) {
+      const ny = (y / size) * twoPi;
+      for (let x = 0; x < size; x++) {
+        const nx = (x / size) * twoPi;
+        const w1 = Math.sin(nx * 3 + ny * 2) * 0.4;
+        const w2 = Math.cos(nx * 5 - ny * 4) * 0.3;
+        const w3 = Math.sin(nx * 8 + ny * 7) * 0.2;
+        const w4 = Math.cos(nx * 2 - ny * 6) * 0.1;
+        const val = Math.max(0, Math.min(255, Math.floor((w1 + w2 + w3 + w4 + 1) * 127.5)));
+        const idx = (y * size + x) * 4;
+        data[idx] = val;
+        data[idx + 1] = val;
+        data[idx + 2] = val;
+        data[idx + 3] = 255;
+      }
+    }
+    ctx.putImageData(imgData, 0, 0);
+  }
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.wrapS = THREE.RepeatWrapping;
+  tex.wrapT = THREE.RepeatWrapping;
+  tex.repeat.set(36, 36);
+  _waterRippleTex = tex;
+  return tex;
+}
+
+export function getRockSurfaceTexture(): THREE.CanvasTexture {
+  if (_rockSurfaceTex) return _rockSurfaceTex;
+  const size = 128;
+  const canvas = document.createElement('canvas');
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext('2d');
+  if (ctx) {
+    ctx.fillStyle = '#7c7872';
+    ctx.fillRect(0, 0, size, size);
+    // Stratified mineral bands & basalt fractures
+    for (let y = 0; y < size; y += 4) {
+      ctx.fillStyle = y % 12 === 0 ? 'rgba(38, 35, 32, 0.32)' : 'rgba(155, 148, 138, 0.22)';
+      ctx.fillRect(0, y, size, 2);
+    }
+    // Weathered pits and lichen mineral speckles
+    for (let i = 0; i < 420; i++) {
+      const x = Math.random() * size;
+      const y = Math.random() * size;
+      const r = 1 + Math.random() * 4.5;
+      ctx.fillStyle =
+        i % 6 === 0
+          ? 'rgba(82, 102, 68, 0.28)'
+          : i % 2 === 0
+          ? 'rgba(42, 39, 36, 0.35)'
+          : 'rgba(185, 178, 168, 0.25)';
+      ctx.beginPath();
+      ctx.arc(x, y, r, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.wrapS = THREE.RepeatWrapping;
+  tex.wrapT = THREE.RepeatWrapping;
+  tex.repeat.set(2, 2);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  _rockSurfaceTex = tex;
+  return tex;
+}
+
 /**
  * Displaces vertices of a BufferGeometry with deterministic 3D sinusoidal noise
  * to turn primitive spheres/dodecahedrons into realistic sculpted organic rocks or foliage crowns.
@@ -312,6 +391,41 @@ export function sculptOrganicGeometry(
         Math.cos(v.y * freq * 1.9);
     const scale = 1 + n * amplitude;
     v.multiplyScalar(scale);
+    pos.setXYZ(i, v.x, v.y, v.z);
+  }
+  geo.computeVertexNormals();
+  return geo;
+}
+
+/**
+ * Sculpts angular, stratified, flat-grounded natural rock geometry with cleaved mineral planes
+ * so boulders and cliff ledges look like weathered basalt rather than uniform spheres.
+ */
+export function sculptNaturalRockGeometry(
+  geo: THREE.BufferGeometry,
+  amplitude = 0.22,
+  freq = 2.4,
+  seed = 1.0
+): THREE.BufferGeometry {
+  const pos = geo.attributes.position;
+  const v = new THREE.Vector3();
+  for (let i = 0; i < pos.count; i++) {
+    v.fromBufferAttribute(pos, i);
+    // Angular terraced rock cleavage
+    const n1 =
+      Math.sin(v.x * freq + seed) *
+      Math.cos(v.y * freq * 1.3 + seed * 1.4) *
+      Math.sin(v.z * freq * 0.95 - seed * 0.7);
+    const terrace = Math.tanh(Math.sin(v.y * 4.5 + seed) * 2.2) * 0.08;
+    const facet = Math.sign(n1) * Math.pow(Math.abs(n1), 0.75) * amplitude;
+    v.x *= 1 + facet + terrace * 0.5;
+    v.z *= 1 + facet - terrace * 0.4;
+    // Gently flatten underside so boulders sit naturally embedded in the ground
+    if (v.y < 0) {
+      v.y *= 0.68;
+    } else {
+      v.y *= 1 + facet * 0.75;
+    }
     pos.setXYZ(i, v.x, v.y, v.z);
   }
   geo.computeVertexNormals();
@@ -746,33 +860,51 @@ export function buildCastawayCharacter(): CastawayRig {
 export function buildCoconutPalmTree(scale = 1.0, leanAngle = 0.18): THREE.Group {
   const group = new THREE.Group();
   const palmBarkTex = getPalmBarkTexture();
+  const foliageBump = getFoliageBumpTexture();
 
   const trunkMat = getCachedMaterial('palm_trunk', () =>
     new THREE.MeshStandardMaterial({
-      color: 0x8b6b4e,
+      color: 0xa6896c,
       map: palmBarkTex,
       bumpMap: palmBarkTex,
-      bumpScale: 0.05,
+      bumpScale: 0.065,
       roughness: 0.88,
       metalness: 0.02,
+      envMapIntensity: 0.35,
     })
   );
   const frondMat = getCachedMaterial('palm_frond_dark', () =>
     new THREE.MeshStandardMaterial({
-      color: 0x2e7d32,
-      roughness: 0.48,
-      metalness: 0.06,
+      color: 0x2b6e2e,
+      bumpMap: foliageBump,
+      bumpScale: 0.035,
+      roughness: 0.44,
+      metalness: 0.05,
+      envMapIntensity: 0.6,
       side: THREE.DoubleSide,
     })
   );
   const frondSunMat = getCachedMaterial('palm_frond_sun', () =>
     new THREE.MeshStandardMaterial({
-      color: 0x43a047,
-      roughness: 0.44,
+      color: 0x4b9e3e,
+      bumpMap: foliageBump,
+      bumpScale: 0.035,
+      roughness: 0.38,
       metalness: 0.06,
+      envMapIntensity: 0.68,
       side: THREE.DoubleSide,
     })
   );
+  const frondAgedMat = getCachedMaterial('palm_frond_aged', () => {
+    const m = new THREE.MeshStandardMaterial({
+      color: 0x6e6b34,
+      roughness: 0.68,
+      metalness: 0.03,
+      side: THREE.DoubleSide,
+    });
+    m.userData.noShadow = true;
+    return m;
+  });
   const coconutMat = getCachedMaterial('palm_coconut_brown', () => {
     const m = new THREE.MeshStandardMaterial({
       color: 0x5d4037,
@@ -785,7 +917,7 @@ export function buildCoconutPalmTree(scale = 1.0, leanAngle = 0.18): THREE.Group
   const greenCocoMat = getCachedMaterial('palm_coconut_green', () => {
     const m = new THREE.MeshStandardMaterial({
       color: 0x689f38,
-      roughness: 0.45,
+      roughness: 0.42,
       metalness: 0.05,
     });
     m.userData.noShadow = true;
@@ -793,41 +925,51 @@ export function buildCoconutPalmTree(scale = 1.0, leanAngle = 0.18): THREE.Group
   });
 
   const boleGeo = sculptOrganicGeometry(
-    new THREE.ConeGeometry(0.46 * scale, 0.75 * scale, 8),
-    0.08,
+    new THREE.ConeGeometry(0.48 * scale, 0.82 * scale, 9),
+    0.1,
     3.5,
     scale
   );
   const bole = new THREE.Mesh(boleGeo, trunkMat);
-  bole.position.y = 0.32 * scale;
+  bole.position.y = 0.34 * scale;
   group.add(bole);
 
-  const segments = 7;
-  const segHeight = 0.94 * scale;
+  const segments = 8;
+  const segHeight = 0.84 * scale;
   let curX = 0;
   let curY = 0.15 * scale;
+  let curZ = 0;
   for (let i = 0; i < segments; i++) {
     const t = i / segments;
-    const rBottom = (0.34 - t * 0.14) * scale;
-    const rTop = (0.32 - t * 0.14) * scale;
-    const cylGeo = new THREE.CylinderGeometry(rTop, rBottom, segHeight * 1.06, 9);
+    const rBottom = (0.34 - t * 0.145) * scale;
+    const rTop = (0.32 - t * 0.145) * scale;
+    const cylGeo = sculptOrganicGeometry(
+      new THREE.CylinderGeometry(rTop, rBottom, segHeight * 1.08, 9),
+      0.035,
+      4.2,
+      i + scale
+    );
     const seg = new THREE.Mesh(cylGeo, trunkMat);
-    const tilt = leanAngle * (0.3 + Math.pow(t, 1.15) * 1.05);
+    const tilt = leanAngle * (0.28 + Math.pow(t, 1.15) * 1.05);
+    const swayZ = Math.sin(t * Math.PI * 1.4 + scale * 3.0) * 0.06 * scale;
     const nextX = curX + Math.sin(tilt) * segHeight;
     const nextY = curY + Math.cos(tilt) * segHeight;
-    seg.position.set((curX + nextX) * 0.5, (curY + nextY) * 0.5, 0);
+    const nextZ = curZ + swayZ;
+    seg.position.set((curX + nextX) * 0.5, (curY + nextY) * 0.5, (curZ + nextZ) * 0.5);
     seg.rotation.z = -tilt;
+    seg.rotation.x = swayZ * 0.35;
     group.add(seg);
     curX = nextX;
     curY = nextY;
+    curZ = nextZ;
   }
 
   const crown = new THREE.Group();
-  crown.position.set(curX, curY, 0);
+  crown.position.set(curX, curY, curZ);
   group.add(crown);
 
-  const heart = new THREE.Mesh(new THREE.SphereGeometry(0.28 * scale, 8, 6), trunkMat);
-  heart.scale.set(1.0, 1.25, 1.0);
+  const heart = new THREE.Mesh(new THREE.SphereGeometry(0.3 * scale, 8, 6), trunkMat);
+  heart.scale.set(1.05, 1.3, 1.05);
   crown.add(heart);
 
   for (let c = 0; c < 5; c++) {
@@ -845,16 +987,17 @@ export function buildCoconutPalmTree(scale = 1.0, leanAngle = 0.18): THREE.Group
     crown.add(coco);
   }
 
-  const frondCount = 8;
+  const frondCount = 10;
   for (let f = 0; f < frondCount; f++) {
-    const isUpper = f >= 5;
-    const angle = (f / frondCount) * Math.PI * 2 + (isUpper ? 0.35 : 0);
+    const isLowerAged = f < 2;
+    const isUpper = f >= 6;
+    const angle = (f / frondCount) * Math.PI * 2 + (isUpper ? 0.32 : isLowerAged ? 0.18 : 0);
     const frondPivot = new THREE.Group();
     frondPivot.rotation.y = angle;
-    frondPivot.rotation.z = isUpper ? 0.28 : -0.06;
+    frondPivot.rotation.z = isUpper ? 0.32 : isLowerAged ? -0.32 : -0.04;
 
-    const secLengths = [0.95 * scale, 1.05 * scale, 0.95 * scale];
-    const secDrops = [0.22, -0.18, -0.58];
+    const secLengths = [0.96 * scale, 1.08 * scale, 0.98 * scale];
+    const secDrops = isLowerAged ? [0.06, -0.34, -0.78] : [0.24, -0.16, -0.58];
     let fx = 0.1 * scale;
     let fy = 0.08 * scale;
 
@@ -865,13 +1008,13 @@ export function buildCoconutPalmTree(scale = 1.0, leanAngle = 0.18): THREE.Group
       const ny = fy + Math.sin(drop) * len;
 
       const stemGeo = new THREE.CylinderGeometry(
-        (0.038 - s * 0.01) * scale,
+        (0.036 - s * 0.01) * scale,
         (0.048 - s * 0.01) * scale,
         len,
         5
       );
       stemGeo.rotateZ(-Math.PI / 2);
-      const stem = new THREE.Mesh(stemGeo, frondMat);
+      const stem = new THREE.Mesh(stemGeo, isLowerAged ? frondAgedMat : frondMat);
       stem.position.set((fx + nx) * 0.5, (fy + ny) * 0.5, 0);
       stem.rotation.z = drop;
       frondPivot.add(stem);
@@ -882,20 +1025,22 @@ export function buildCoconutPalmTree(scale = 1.0, leanAngle = 0.18): THREE.Group
         const lx = fx + (nx - fx) * pt;
         const ly = fy + (ny - fy) * pt;
         const overallT = (s + pt) / 3;
-        const leafletLen = (0.78 - Math.abs(overallT - 0.42) * 0.72) * scale;
-        const leafletWidth = (0.15 - s * 0.025) * scale;
+        const leafletLen = (0.82 - Math.abs(overallT - 0.42) * 0.72) * scale;
+        const leafletWidth = (0.15 - s * 0.024) * scale;
 
         for (const side of [-1, 1]) {
           const leafGeo = new THREE.ConeGeometry(leafletWidth, leafletLen, 3);
-          leafGeo.scale(0.35, 1.0, 1.0);
-          const leaf = new THREE.Mesh(
-            leafGeo,
-            (f + p) % 2 === 0 ? frondSunMat : frondMat
-          );
+          leafGeo.scale(0.32, 1.0, 1.0);
+          const leafMatChoice = isLowerAged
+            ? frondAgedMat
+            : (f + p) % 2 === 0
+            ? frondSunMat
+            : frondMat;
+          const leaf = new THREE.Mesh(leafGeo, leafMatChoice);
           leaf.position.set(lx, ly - 0.04 * scale, side * leafletLen * 0.42);
-          leaf.rotation.x = side * (Math.PI * 0.36);
-          leaf.rotation.y = side * -0.32;
-          leaf.rotation.z = drop - 0.15;
+          leaf.rotation.x = side * (Math.PI * 0.34 + s * 0.05);
+          leaf.rotation.y = side * -0.3;
+          leaf.rotation.z = drop - 0.16;
           frondPivot.add(leaf);
         }
       }
@@ -920,50 +1065,55 @@ export function buildJungleTree(scale = 1.0): THREE.Group {
 
   const barkMat = getCachedMaterial('jungle_bark', () =>
     new THREE.MeshStandardMaterial({
-      color: 0x543d2b,
+      color: 0x6e523b,
       map: barkTex,
       bumpMap: barkTex,
-      bumpScale: 0.06,
-      roughness: 0.92,
+      bumpScale: 0.075,
+      roughness: 0.9,
       metalness: 0.02,
+      envMapIntensity: 0.3,
     })
   );
 
   const canopyMats = [
     getCachedMaterial('jungle_canopy_0', () =>
       new THREE.MeshStandardMaterial({
-        color: 0x1b4d20,
+        color: 0x18481d,
         bumpMap: foliageBump,
-        bumpScale: 0.08,
-        roughness: 0.72,
+        bumpScale: 0.1,
+        roughness: 0.68,
         metalness: 0.03,
+        envMapIntensity: 0.48,
       })
     ),
     getCachedMaterial('jungle_canopy_1', () =>
       new THREE.MeshStandardMaterial({
-        color: 0x26692b,
+        color: 0x246329,
         bumpMap: foliageBump,
-        bumpScale: 0.08,
-        roughness: 0.64,
+        bumpScale: 0.09,
+        roughness: 0.6,
         metalness: 0.04,
+        envMapIntensity: 0.54,
       })
     ),
     getCachedMaterial('jungle_canopy_2', () =>
       new THREE.MeshStandardMaterial({
-        color: 0x358233,
+        color: 0x337d31,
         bumpMap: foliageBump,
-        bumpScale: 0.07,
-        roughness: 0.56,
+        bumpScale: 0.08,
+        roughness: 0.52,
         metalness: 0.05,
+        envMapIntensity: 0.6,
       })
     ),
     getCachedMaterial('jungle_canopy_3', () =>
       new THREE.MeshStandardMaterial({
-        color: 0x489939,
+        color: 0x4b9938,
         bumpMap: foliageBump,
-        bumpScale: 0.06,
-        roughness: 0.52,
+        bumpScale: 0.07,
+        roughness: 0.46,
         metalness: 0.05,
+        envMapIntensity: 0.65,
       })
     ),
   ];
@@ -979,26 +1129,33 @@ export function buildJungleTree(scale = 1.0): THREE.Group {
 
   const trunkH = 5.4 * scale;
   const trunkGeo = sculptOrganicGeometry(
-    new THREE.CylinderGeometry(0.38 * scale, 0.68 * scale, trunkH, 10, 4),
-    0.07,
-    2.2,
+    new THREE.CylinderGeometry(0.36 * scale, 0.72 * scale, trunkH, 10, 5),
+    0.09,
+    2.4,
     scale * 3.1
   );
   const trunk = new THREE.Mesh(trunkGeo, barkMat);
   trunk.position.y = trunkH * 0.5;
   group.add(trunk);
 
+  // Sculpted organic buttress roots instead of boxy slabs
   for (let r = 0; r < 5; r++) {
     const a = (r / 5) * Math.PI * 2 + 0.2;
-    const rootGeo = new THREE.BoxGeometry(0.18 * scale, 1.85 * scale, 0.95 * scale);
+    const rootGeo = sculptOrganicGeometry(
+      new THREE.ConeGeometry(0.28 * scale, 2.0 * scale, 6),
+      0.12,
+      3.1,
+      r + scale
+    );
+    rootGeo.scale(0.65, 1.0, 1.35);
     const rootMesh = new THREE.Mesh(rootGeo, barkMat);
     rootMesh.position.set(
-      Math.cos(a) * 0.52 * scale,
-      0.68 * scale,
-      Math.sin(a) * 0.52 * scale
+      Math.cos(a) * 0.5 * scale,
+      0.66 * scale,
+      Math.sin(a) * 0.5 * scale
     );
     rootMesh.rotation.y = -a + Math.PI / 2;
-    rootMesh.rotation.x = 0.42;
+    rootMesh.rotation.x = 0.44;
     group.add(rootMesh);
   }
 
@@ -1009,7 +1166,12 @@ export function buildJungleTree(scale = 1.0): THREE.Group {
     { x: -0.65, y: trunkH - 0.45 * scale, z: -0.7, rz: 0.45, rx: -0.45 },
   ];
   for (const b of boughOffsets) {
-    const boughGeo = new THREE.CylinderGeometry(0.14 * scale, 0.26 * scale, 2.2 * scale, 7);
+    const boughGeo = sculptOrganicGeometry(
+      new THREE.CylinderGeometry(0.13 * scale, 0.27 * scale, 2.25 * scale, 7, 2),
+      0.08,
+      2.8,
+      b.x + b.z
+    );
     const bough = new THREE.Mesh(boughGeo, barkMat);
     bough.position.set(b.x * 0.55 * scale, b.y, b.z * 0.55 * scale);
     bough.rotation.z = b.rz;
@@ -1018,27 +1180,28 @@ export function buildJungleTree(scale = 1.0): THREE.Group {
   }
 
   const crownClusters = [
-    { x: 0.0, y: trunkH + 0.85 * scale, z: 0.0, r: 2.05, sy: 0.62, matIdx: 2 },
-    { x: 1.25, y: trunkH + 0.15 * scale, z: 0.75, r: 1.65, sy: 0.58, matIdx: 1 },
-    { x: -1.2, y: trunkH + 0.25 * scale, z: 0.65, r: 1.6, sy: 0.6, matIdx: 0 },
-    { x: 0.7, y: trunkH + 0.3 * scale, z: -1.15, r: 1.55, sy: 0.58, matIdx: 1 },
-    { x: -0.95, y: trunkH + 0.2 * scale, z: -0.95, r: 1.5, sy: 0.62, matIdx: 0 },
-    { x: 0.45, y: trunkH + 1.35 * scale, z: 0.3, r: 1.35, sy: 0.65, matIdx: 3 },
-    { x: -0.5, y: trunkH + 1.25 * scale, z: -0.25, r: 1.3, sy: 0.62, matIdx: 2 },
-    { x: 0.0, y: trunkH - 0.25 * scale, z: 0.0, r: 2.25, sy: 0.48, matIdx: 0 },
+    { x: 0.0, y: trunkH + 0.85 * scale, z: 0.0, r: 2.05, sy: 0.58, matIdx: 2 },
+    { x: 1.25, y: trunkH + 0.15 * scale, z: 0.75, r: 1.68, sy: 0.54, matIdx: 1 },
+    { x: -1.2, y: trunkH + 0.25 * scale, z: 0.65, r: 1.62, sy: 0.56, matIdx: 0 },
+    { x: 0.7, y: trunkH + 0.3 * scale, z: -1.15, r: 1.58, sy: 0.55, matIdx: 1 },
+    { x: -0.95, y: trunkH + 0.2 * scale, z: -0.95, r: 1.52, sy: 0.58, matIdx: 0 },
+    { x: 0.45, y: trunkH + 1.35 * scale, z: 0.3, r: 1.38, sy: 0.6, matIdx: 3 },
+    { x: -0.5, y: trunkH + 1.25 * scale, z: -0.25, r: 1.32, sy: 0.58, matIdx: 2 },
+    { x: 0.0, y: trunkH - 0.25 * scale, z: 0.0, r: 2.28, sy: 0.44, matIdx: 0 },
   ];
 
   for (let i = 0; i < crownClusters.length; i++) {
     const c = crownClusters[i];
     const crownGeo = sculptOrganicGeometry(
-      new THREE.IcosahedronGeometry(c.r * scale, 1),
-      0.16,
-      2.4,
+      new THREE.IcosahedronGeometry(c.r * scale, 2),
+      0.19,
+      2.5,
       i * 1.9 + scale
     );
-    crownGeo.scale(1.12, c.sy, 1.12);
+    crownGeo.scale(1.16, c.sy, 1.14);
     const crownMesh = new THREE.Mesh(crownGeo, canopyMats[c.matIdx]);
     crownMesh.position.set(c.x * scale, c.y, c.z * scale);
+    crownMesh.rotation.y = i * 1.1;
     group.add(crownMesh);
   }
 
@@ -1047,7 +1210,7 @@ export function buildJungleTree(scale = 1.0): THREE.Group {
     const vr = (1.35 + (v % 2) * 0.45) * scale;
     const vineH = (2.2 + (v % 3) * 0.55) * scale;
     const vine = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.032 * scale, 0.02 * scale, vineH, 5),
+      new THREE.CylinderGeometry(0.032 * scale, 0.018 * scale, vineH, 5),
       vineMat
     );
     vine.position.set(Math.cos(va) * vr, trunkH - vineH * 0.45, Math.sin(va) * vr);
@@ -1208,15 +1371,21 @@ export function buildGrandCanopyTree(scale = 1.0): THREE.Group {
   trunk.position.y = trunkH * 0.5;
   group.add(trunk);
 
-  // 5 Massive Fluted Buttress Roots sprawling outward from base
+  // 5 Massive Fluted Buttress Roots sprawling outward from base (sculpted organic fins)
   for (let r = 0; r < 5; r++) {
     const a = (r / 5) * Math.PI * 2 + 0.15;
-    const buttressGeo = new THREE.BoxGeometry(0.24 * scale, 3.2 * scale, 2.1 * scale);
+    const buttressGeo = sculptOrganicGeometry(
+      new THREE.ConeGeometry(0.45 * scale, 3.4 * scale, 7),
+      0.14,
+      2.6,
+      r * 1.7 + scale
+    );
+    buttressGeo.scale(0.55, 1.0, 2.2);
     const buttress = new THREE.Mesh(buttressGeo, barkMat);
     buttress.position.set(
-      Math.cos(a) * 0.95 * scale,
-      1.1 * scale,
-      Math.sin(a) * 0.95 * scale
+      Math.cos(a) * 0.92 * scale,
+      1.15 * scale,
+      Math.sin(a) * 0.92 * scale
     );
     buttress.rotation.y = -a + Math.PI / 2;
     buttress.rotation.x = 0.52;
@@ -1233,7 +1402,12 @@ export function buildGrandCanopyTree(scale = 1.0): THREE.Group {
     { x: -0.3, y: trunkH + 0.3 * scale, z: -1.6, rz: 0.18, rx: -0.55, len: 2.9 },
   ];
   for (const b of boughSpecs) {
-    const boughGeo = new THREE.CylinderGeometry(0.18 * scale, 0.38 * scale, b.len * scale, 8);
+    const boughGeo = sculptOrganicGeometry(
+      new THREE.CylinderGeometry(0.18 * scale, 0.38 * scale, b.len * scale, 8, 2),
+      0.08,
+      2.5,
+      b.x + b.z
+    );
     const bough = new THREE.Mesh(boughGeo, barkMat);
     bough.position.set(b.x * 0.5 * scale, b.y, b.z * 0.5 * scale);
     bough.rotation.z = b.rz;
@@ -1243,29 +1417,30 @@ export function buildGrandCanopyTree(scale = 1.0): THREE.Group {
 
   // Multi-tier majestic canopy clouds
   const crownClusters = [
-    { x: 0.0, y: trunkH + 1.4 * scale, z: 0.0, r: 3.2, sy: 0.52, matIdx: 3 },
-    { x: 2.2, y: trunkH + 0.4 * scale, z: 1.1, r: 2.6, sy: 0.48, matIdx: 2 },
-    { x: -2.1, y: trunkH + 0.6 * scale, z: 1.3, r: 2.5, sy: 0.5, matIdx: 1 },
-    { x: 1.1, y: trunkH + 0.7 * scale, z: -2.2, r: 2.4, sy: 0.48, matIdx: 2 },
-    { x: -1.6, y: trunkH + 0.5 * scale, z: -1.6, r: 2.3, sy: 0.52, matIdx: 0 },
-    { x: 0.3, y: trunkH + 1.1 * scale, z: 2.1, r: 2.2, sy: 0.48, matIdx: 3 },
-    { x: -0.4, y: trunkH + 1.2 * scale, z: -1.9, r: 2.1, sy: 0.5, matIdx: 1 },
-    { x: 0.7, y: trunkH + 2.2 * scale, z: 0.5, r: 2.2, sy: 0.56, matIdx: 3 },
-    { x: -0.8, y: trunkH + 2.0 * scale, z: -0.4, r: 2.0, sy: 0.54, matIdx: 2 },
-    { x: 0.0, y: trunkH - 0.4 * scale, z: 0.0, r: 3.5, sy: 0.42, matIdx: 0 },
+    { x: 0.0, y: trunkH + 1.4 * scale, z: 0.0, r: 3.2, sy: 0.5, matIdx: 3 },
+    { x: 2.2, y: trunkH + 0.4 * scale, z: 1.1, r: 2.6, sy: 0.46, matIdx: 2 },
+    { x: -2.1, y: trunkH + 0.6 * scale, z: 1.3, r: 2.5, sy: 0.48, matIdx: 1 },
+    { x: 1.1, y: trunkH + 0.7 * scale, z: -2.2, r: 2.4, sy: 0.46, matIdx: 2 },
+    { x: -1.6, y: trunkH + 0.5 * scale, z: -1.6, r: 2.3, sy: 0.5, matIdx: 0 },
+    { x: 0.3, y: trunkH + 1.1 * scale, z: 2.1, r: 2.2, sy: 0.46, matIdx: 3 },
+    { x: -0.4, y: trunkH + 1.2 * scale, z: -1.9, r: 2.1, sy: 0.48, matIdx: 1 },
+    { x: 0.7, y: trunkH + 2.2 * scale, z: 0.5, r: 2.2, sy: 0.54, matIdx: 3 },
+    { x: -0.8, y: trunkH + 2.0 * scale, z: -0.4, r: 2.0, sy: 0.52, matIdx: 2 },
+    { x: 0.0, y: trunkH - 0.4 * scale, z: 0.0, r: 3.5, sy: 0.4, matIdx: 0 },
   ];
 
   for (let i = 0; i < crownClusters.length; i++) {
     const c = crownClusters[i];
     const crownGeo = sculptOrganicGeometry(
-      new THREE.IcosahedronGeometry(c.r * scale, 1),
-      0.18,
+      new THREE.IcosahedronGeometry(c.r * scale, 2),
+      0.2,
       2.2,
       i * 2.3 + scale * 4.1
     );
     crownGeo.scale(1.18, c.sy, 1.18);
     const crownMesh = new THREE.Mesh(crownGeo, canopyMats[c.matIdx]);
     crownMesh.position.set(c.x * scale, c.y, c.z * scale);
+    crownMesh.rotation.y = i * 0.95;
     group.add(crownMesh);
   }
 
@@ -1571,12 +1746,17 @@ export function buildFreshwaterStreamWaterMesh(): THREE.Group {
   ribbonGeom.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
   ribbonGeom.computeVertexNormals();
 
+  const waterRippleTex = getWaterRippleBumpTexture();
+
   const streamMat = new THREE.MeshStandardMaterial({
     vertexColors: true,
-    roughness: 0.12,
-    metalness: 0.08,
+    bumpMap: waterRippleTex,
+    bumpScale: 0.04,
+    roughness: 0.1,
+    metalness: 0.12,
+    envMapIntensity: 1.25,
     transparent: true,
-    opacity: 0.78,
+    opacity: 0.82,
     side: THREE.DoubleSide,
   });
   streamMat.userData.noShadow = true;
@@ -1609,7 +1789,7 @@ export function buildFreshwaterStreamWaterMesh(): THREE.Group {
       wfVerts.push(x, curY, curZ);
       wfUvs.push(tx, st * 4.0);
 
-      if (si === 0 || si === waterfallSteps || Math.random() > 0.4) {
+      if (si === 0 || si === waterfallSteps || (si + xi) % 2 === 0) {
         wfColors.push(foamColor.r, foamColor.g, foamColor.b);
       } else {
         wfColors.push(dropColor.r, dropColor.g, dropColor.b);
@@ -1638,10 +1818,13 @@ export function buildFreshwaterStreamWaterMesh(): THREE.Group {
 
   const wfMat = new THREE.MeshStandardMaterial({
     vertexColors: true,
-    roughness: 0.15,
-    metalness: 0.05,
+    bumpMap: waterRippleTex,
+    bumpScale: 0.06,
+    roughness: 0.14,
+    metalness: 0.08,
+    envMapIntensity: 1.2,
     transparent: true,
-    opacity: 0.86,
+    opacity: 0.88,
     side: THREE.DoubleSide,
   });
   wfMat.userData.noShadow = true;
@@ -1664,11 +1847,11 @@ export function buildStage2LakesAndRiversMesh(): THREE.Group {
   const uvs: number[] = [];
   const indices: number[] = [];
 
-  const lakeDeep = new THREE.Color(0x0284c7);
-  const lakeMid = new THREE.Color(0x0ea5e9);
-  const lakeShallow = new THREE.Color(0x7dd3fc);
-  const riverRapid = new THREE.Color(0xe0f2fe);
-  const riverFlow = new THREE.Color(0x38bdf8);
+  const lakeDeep = new THREE.Color(0x0369a1);
+  const lakeMid = new THREE.Color(0x0d9488);
+  const lakeShallow = new THREE.Color(0x67e8f9);
+  const riverRapid = new THREE.Color(0xf0fdfa);
+  const riverFlow = new THREE.Color(0x22d3ee);
   const scratchColor = new THREE.Color();
 
   // 1. Build 3D Water Surface Discs for all Stage 2 Lakes
@@ -1817,12 +2000,17 @@ export function buildStage2LakesAndRiversMesh(): THREE.Group {
   waterGeo.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
   waterGeo.computeVertexNormals();
 
+  const waterRippleTex = getWaterRippleBumpTexture();
+
   const waterMat = new THREE.MeshStandardMaterial({
     vertexColors: true,
-    roughness: 0.14,
-    metalness: 0.12,
+    bumpMap: waterRippleTex,
+    bumpScale: 0.045,
+    roughness: 0.11,
+    metalness: 0.14,
+    envMapIntensity: 1.3,
     transparent: true,
-    opacity: 0.84,
+    opacity: 0.86,
     side: THREE.DoubleSide,
     polygonOffset: true,
     polygonOffsetFactor: -1,
@@ -1882,13 +2070,13 @@ export function createMasterUnderstoryPalmGeometry(): THREE.BufferGeometry {
 }
 
 export function createMasterRockGeometry(): THREE.BufferGeometry {
-  const geo = sculptOrganicGeometry(
-    new THREE.IcosahedronGeometry(0.72, 2),
-    0.22,
+  const geo = sculptNaturalRockGeometry(
+    new THREE.IcosahedronGeometry(0.74, 2),
+    0.24,
     2.6,
     3.7
   );
-  geo.scale(1.2, 0.75, 1.05);
+  geo.scale(1.22, 0.72, 1.06);
   return geo;
 }
 
@@ -2902,50 +3090,69 @@ export function buildVolumetricGodRays(): THREE.Group {
  * Builds animated shoreline surf foam fringe that swells against the southern beach shelf.
  */
 export function buildShorelineSurfFoam(): THREE.Mesh {
-  const segments = 64;
+  const segments = 72;
   const geom = new THREE.BufferGeometry();
   const verts: number[] = [];
+  const colors: number[] = [];
   const uvs: number[] = [];
   const indices: number[] = [];
 
+  const foamCrest = new THREE.Color(0xffffff);
+  const foamTurquoise = new THREE.Color(0x99f6e4);
+
   for (let i = 0; i <= segments; i++) {
     const t = i / segments;
-    const angle = Math.PI * 0.39 + t * Math.PI * 0.22; // Southern Castaway Cove shoreline curve
-    const rInner = 66.5;
-    const rOuter = 74.0;
+    const angle = Math.PI * 0.36 + t * Math.PI * 0.28; // Extended Southern Castaway Cove shoreline curve
+    const scallop = Math.sin(t * Math.PI * 14) * 0.65 + Math.cos(t * Math.PI * 9) * 0.4;
+    const rInner = 66.2 + scallop * 0.5;
+    const rMid = 69.5 + scallop * 0.8;
+    const rOuter = 75.2 + scallop;
 
-    const xInner = Math.cos(angle) * rInner;
-    const zInner = Math.sin(angle) * rInner;
-    const xOuter = Math.cos(angle) * rOuter;
-    const zOuter = Math.sin(angle) * rOuter;
+    const cA = Math.cos(angle);
+    const sA = Math.sin(angle);
 
-    verts.push(xInner, 0.08, zInner);
-    uvs.push(0, t * 10.0);
+    // Inner whitewash lip on wet sand
+    verts.push(cA * rInner, 0.09, sA * rInner);
+    colors.push(foamCrest.r, foamCrest.g, foamCrest.b);
+    uvs.push(0, t * 12.0);
 
-    verts.push(xOuter, 0.02, zOuter);
-    uvs.push(1, t * 10.0);
+    // Mid breaking surf crest
+    verts.push(cA * rMid, 0.05, sA * rMid);
+    colors.push(foamCrest.r, foamCrest.g, foamCrest.b);
+    uvs.push(0.45, t * 12.0);
+
+    // Outer turquoise aerated shallows
+    verts.push(cA * rOuter, 0.02, sA * rOuter);
+    colors.push(foamTurquoise.r, foamTurquoise.g, foamTurquoise.b);
+    uvs.push(1, t * 12.0);
   }
 
   for (let i = 0; i < segments; i++) {
-    const a = i * 2;
-    const b = i * 2 + 1;
-    const c = (i + 1) * 2;
-    const d = (i + 1) * 2 + 1;
-    indices.push(a, b, c);
-    indices.push(b, d, c);
+    const row1 = i * 3;
+    const row2 = (i + 1) * 3;
+    // Inner band
+    indices.push(row1, row1 + 1, row2);
+    indices.push(row1 + 1, row2 + 1, row2);
+    // Outer band
+    indices.push(row1 + 1, row1 + 2, row2 + 1);
+    indices.push(row1 + 2, row2 + 2, row2 + 1);
   }
 
   geom.setIndex(indices);
   geom.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
+  geom.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
   geom.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
   geom.computeVertexNormals();
 
   const foamMat = new THREE.MeshStandardMaterial({
-    color: 0xf0fdfa,
-    roughness: 0.18,
-    metalness: 0.08,
+    vertexColors: true,
+    bumpMap: getWaterRippleBumpTexture(),
+    bumpScale: 0.03,
+    roughness: 0.16,
+    metalness: 0.06,
+    envMapIntensity: 1.1,
     transparent: true,
-    opacity: 0.48,
+    opacity: 0.52,
     side: THREE.DoubleSide,
     depthWrite: false,
   });
@@ -3064,44 +3271,52 @@ export function updateBioluminescentMushroomEmissive(intensity: number): void {
  */
 export function getSharedEnvironmentMaterials() {
   const bumpTex = createOrganicBumpTexture(256);
+  const rockTex = getRockSurfaceTexture();
   const barkTex = getJungleBarkTexture();
   const fabricTex = getWeatheredFabricTexture();
 
   const wetBasaltMat = getCachedMaterial('env_wet_basalt', () =>
     new THREE.MeshStandardMaterial({
-      color: 0x242322,
+      color: 0x3b3937,
+      map: rockTex,
       bumpMap: bumpTex,
-      bumpScale: 0.12,
-      roughness: 0.65,
-      metalness: 0.15,
+      bumpScale: 0.14,
+      roughness: 0.38,
+      metalness: 0.14,
+      envMapIntensity: 0.85,
     })
   );
 
   const mossyRockMat = getCachedMaterial('env_mossy_rock', () =>
     new THREE.MeshStandardMaterial({
-      color: 0x384534,
+      color: 0x4f6349,
+      map: rockTex,
       bumpMap: bumpTex,
-      bumpScale: 0.1,
-      roughness: 0.85,
+      bumpScale: 0.12,
+      roughness: 0.82,
       metalness: 0.04,
+      envMapIntensity: 0.42,
     })
   );
 
   const rockMat = getCachedMaterial('env_coastal_rock', () =>
     new THREE.MeshStandardMaterial({
-      color: 0x56524e,
+      color: 0x736e68,
+      map: rockTex,
       bumpMap: bumpTex,
-      bumpScale: 0.08,
-      roughness: 0.86,
+      bumpScale: 0.11,
+      roughness: 0.84,
       metalness: 0.05,
+      envMapIntensity: 0.45,
     })
   );
 
   const shellMat = getCachedMaterial('env_conch_shell', () => {
     const m = new THREE.MeshStandardMaterial({
       color: 0xfff0db,
-      roughness: 0.28,
+      roughness: 0.24,
       metalness: 0.08,
+      envMapIntensity: 0.75,
     });
     m.userData.noShadow = true;
     return m;
@@ -3109,27 +3324,29 @@ export function getSharedEnvironmentMaterials() {
 
   const timberMat = getCachedMaterial('env_shipwreck_timber', () =>
     new THREE.MeshStandardMaterial({
-      color: 0x4e342e,
+      color: 0x69493d,
       map: barkTex,
       bumpMap: bumpTex,
-      bumpScale: 0.05,
-      roughness: 0.9,
+      bumpScale: 0.06,
+      roughness: 0.88,
+      envMapIntensity: 0.32,
     })
   );
 
   const sailMat = getCachedMaterial('env_shipwreck_sail', () =>
     new THREE.MeshStandardMaterial({
-      color: 0xd7ccc8,
+      color: 0xe3d9d2,
       map: fabricTex,
       bumpMap: bumpTex,
-      bumpScale: 0.02,
-      roughness: 0.85,
+      bumpScale: 0.025,
+      roughness: 0.84,
       side: THREE.DoubleSide,
     })
   );
 
   return {
     bumpTex,
+    rockTex,
     wetBasaltMat,
     mossyRockMat,
     riverRockMat: rockMat,
