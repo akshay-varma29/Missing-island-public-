@@ -1,0 +1,6 @@
+{
+  "name": "Caldera Castaway: Tropical Island Survival",
+  "description": "3D third-person tropical survival adventure for Warrior for World, featuring Part 2: Dense Jungle directly inside the volcanic island with ancient canopy giants, understory palms, freshwater stream, waterfall, dirt trails, and realistic island terrain.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
